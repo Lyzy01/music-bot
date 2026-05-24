@@ -14,15 +14,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
-    'quiet': True,
-    'default_search': 'ytsearch',
+    'default_search': 'ytsearch', # Change this to 'scsearch' if YouTube keeps failing
     'nocheckcertificate': True,
-    'no_warnings': True,
-    'source_address': '0.0.0.0',
-    'extract_flat': 'in_playlist',  # This helps skip some YouTube blocks
-    'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+    'quiet': True,
 }
 
 @bot.event
