@@ -1,112 +1,99 @@
 import os
 import discord
+from discord import app_commands
 from discord.ext import commands
 import yt_dlp
 import asyncio
 from keep_alive import keep_alive
 
-# Set up bot intents
+# 1. Setup Bot with a command prefix (only used for the !sync command)
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Configuration for yt-dlp (extracts audio only)
-YTDL_OPTIONS = {
-    'format': 'bestaudio/best',
-    'noplaylist': True,
-    'quiet': True,
-    'default_search': 'ytsearch',
-    'nocheckcertificate': True,
-}
-
-# Configuration for FFmpeg (handles the audio stream processing)
-FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn',
-}
-
+# Configuration for audio extraction
+YTDL_OPTIONS = {'format': 'bestaudio/best', 'noplaylist': True, 'quiet': True, 'default_search': 'ytsearch', 'nocheckcertificate': True}
+FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
 @bot.event
 async def on_ready():
-    print(f'⚡ {bot.user.name} is connected to Discord Voice systems!')
+    print(f'⚡ {bot.user.name} is online and ready for Slash Commands!')
 
+# --- THE SYNC COMMAND (Run this once in Discord to activate / commands) ---
 @bot.command()
-async def join(ctx):
-    """Makes the bot join your current voice channel"""
-    if ctx.author.voice:
-        channel = ctx.author.voice.channel
-        if ctx.voice_client:
-            await ctx.voice_client.move_to(channel)
+@commands.is_owner()
+async def sync(ctx):
+    await bot.tree.sync()
+    await ctx.send("✅ Slash commands synced to all servers!")
+
+# --- SLASH COMMANDS ---
+
+@bot.tree.command(name="join", description="Makes the bot join your voice channel")
+async def join(interaction: discord.Interaction):
+    if interaction.user.voice:
+        channel = interaction.user.voice.channel
+        if interaction.guild.voice_client:
+            await interaction.guild.voice_client.move_to(channel)
         else:
-            await ctx.voice_client.connect()
+            await channel.connect()
+        await interaction.response.send_message(f"Connected to **{channel.name}**!")
     else:
-        await ctx.send("❌ You need to join a voice channel first!")
+        await interaction.response.send_message("❌ Join a voice channel first!", ephemeral=True)
 
-@bot.command()
-async def play(ctx, *, search: str):
-    """Plays audio from YouTube: !play [song name or video URL]"""
-    if not ctx.voice_client:
-        await ctx.invoke(join)
-        
-    if not ctx.voice_client:
-        return
+@bot.tree.command(name="play", description="Play a song from YouTube")
+@app_commands.describe(search="The song name or YouTube link")
+async def play(interaction: discord.Interaction, search: str):
+    # This command takes time, so we "defer" the response to avoid a timeout error
+    await interaction.response.defer()
 
-    await ctx.send(f"🔍 Searching YouTube for: **{search}**...")
+    if not interaction.guild.voice_client:
+        if interaction.user.voice:
+            await interaction.user.voice.channel.connect()
+        else:
+            await interaction.followup.send("❌ Join a voice channel first!")
+            return
 
-    # Extract audio link asynchronously so the bot doesn't freeze
+    # Search for the song
     loop = asyncio.get_event_loop()
     try:
         data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
+        info = data['entries'][0] if 'entries' in data else data
+        url, title = info['url'], info['title']
+
+        if interaction.guild.voice_client.is_playing():
+            interaction.guild.voice_client.stop()
+
+        interaction.guild.voice_client.play(discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS))
+        await interaction.followup.send(f"🎶 Now playing: **{title}**")
     except Exception as e:
-        await ctx.send("❌ Failed to process or find that song.")
+        await interaction.followup.send("❌ Error finding that song.")
         print(e)
-        return
 
-    # Grab the first video result if a search term was used
-    if 'entries' in data:
-        info = data['entries'][0]
+@bot.tree.command(name="stop", description="Stop the music and leave")
+async def stop(interaction: discord.Interaction):
+    if interaction.guild.voice_client:
+        await interaction.guild.voice_client.disconnect()
+        await interaction.response.send_message("👋 Left the voice channel.")
     else:
-        info = data
+        await interaction.response.send_message("I'm not in a voice channel.", ephemeral=True)
 
-    url = info['url']
-    title = info['title']
-
-    # If something is already playing, stop it first
-    if ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-
-    # Pass the stream link into FFmpeg and play it in Discord
-    audio_source = discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS)
-    ctx.voice_client.play(audio_source)
-    
-    await ctx.send(f"🎶 Now playing: **{title}**")
-
-@bot.command()
-async def pause(ctx):
-    """Pauses the current song"""
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.pause()
-        await ctx.send("⏸️ Music paused.")
-
-@bot.command()
-async def resume(ctx):
-    """Resumes a paused song"""
-    if ctx.voice_client and ctx.voice_client.is_paused():
-        ctx.voice_client.resume()
-        await ctx.send("▶️ Music resumed.")
-
-@bot.command()
-async def leave(ctx):
-    """Disconnects the bot from the voice channel"""
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-        await ctx.send("👋 Left the voice channel.")
+@bot.tree.command(name="pause", description="Pause the current song")
+async def pause(interaction: discord.Interaction):
+    if interaction.guild.voice_client and interaction.guild.voice_client.is_playing():
+        interaction.guild.voice_client.pause()
+        await interaction.response.send_message("⏸️ Music paused.")
     else:
-        await ctx.send("❌ I am not in a voice channel.")
+        await interaction.response.send_message("Nothing is playing.", ephemeral=True)
 
-# Fire up the background web server
+@bot.tree.command(name="resume", description="Resume the current song")
+async def resume(interaction: discord.Interaction):
+    if interaction.guild.voice_client and interaction.guild.voice_client.is_paused():
+        interaction.guild.voice_client.resume()
+        await interaction.response.send_message("▶️ Music resumed.")
+    else:
+        await interaction.response.send_message("The music isn't paused.", ephemeral=True)
+
+# Start web server & bot
 keep_alive()
-
-# Start the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
