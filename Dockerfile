@@ -1,22 +1,23 @@
-FROM python:3.10-slim
+# Use the official Python image
+FROM python:3.11-slim
 
-# Install system dependencies, including FFmpeg for audio processing
+# 1. Install system dependencies (FFMPEG IS HERE)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    libopus-dev \
+    python3-dev \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# 2. Set working directory
 WORKDIR /app
 
-# Copy and install python requirements
+# 3. Copy and install requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy all project files
+# 4. Copy the rest of your code
 COPY . .
 
-# Expose the Flask web port for Render
-EXPOSE 8080
-
-# Run the bot
+# 5. Start the bot
 CMD ["python", "bot.py"]
