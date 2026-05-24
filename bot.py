@@ -28,14 +28,17 @@ YTDL_OPTIONS = {
     'quiet': True,
     'default_search': 'ytsearch',
     'nocheckcertificate': True,
-    'no_warnings': True,
-    'source_address': '0.0.0.0', # Helps with some IPv6 blocks
-    'force_ipv4': True,
+    # This is the "Secret Sauce" to bypass the bot check without cookies
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'web'],
+            'skip': ['webpage', 'hls', 'dash'],
+        }
+    },
     'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'User-Agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 11) gzip',
     }
 }
-
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn'
