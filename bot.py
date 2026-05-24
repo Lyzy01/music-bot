@@ -11,10 +11,16 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Configuration for audio extraction
-YTDL_OPTIONS = {'format': 'bestaudio/best', 'noplaylist': True, 'quiet': True, 'default_search': 'ytsearch', 'nocheckcertificate': True}
-FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
-ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
+YTDL_OPTIONS = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+    'default_search': 'ytsearch',
+    'nocheckcertificate': True,
+    'no_warnings': True,
+    'source_address': '0.0.0.0', # Helps with potential networking issues on Render
+    'force_generic_extractor': False,
+}
 
 @bot.event
 async def on_ready():
