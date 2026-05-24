@@ -1,7 +1,7 @@
-# Use the official Python image
+# 1. Start with Python 3.11
 FROM python:3.11-slim
 
-# 1. Install system dependencies (FFMPEG IS HERE)
+# 2. Install FFmpeg and audio libraries (CRITICAL FOR SOUND)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libopus-dev \
@@ -9,15 +9,15 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Set working directory
+# 3. Set the directory inside the container
 WORKDIR /app
 
-# 3. Copy and install requirements
+# 4. Install your Python packages
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Copy the rest of your code
+# 5. Copy your bot code and keep_alive.py
 COPY . .
 
-# 5. Start the bot
+# 6. Run the bot
 CMD ["python", "bot.py"]
