@@ -1,102 +1,115 @@
-import os
 import discord
 from discord import app_commands
 from discord.ext import commands
 import yt_dlp
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
+import os
 import asyncio
 from keep_alive import keep_alive
 
-# 1. Setup Bot with a command prefix (only used for the !sync command)
+# 1. Setup & Authentication
+TOKEN = os.getenv('DISCORD_TOKEN')
+sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
+    client_id=os.getenv('SPOTIPY_CLIENT_ID'),
+    client_secret=os.getenv('SPOTIPY_CLIENT_SECRET')
+))
+
+# 2. Bot Configuration
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# 3. Music Player Options
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
-    'default_search': 'ytsearch', # Change this to 'scsearch' if YouTube keeps failing
-    'nocheckcertificate': True,
     'quiet': True,
+    'default_search': 'ytsearch',
+    'nocheckcertificate': True,
+    'no_warnings': True,
+    'source_address': '0.0.0.0',
+    'extract_flat': True,
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
 }
 
+FFMPEG_OPTIONS = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-vn'
+}
+
+# 4. Events
 @bot.event
 async def on_ready():
-    print(f'⚡ {bot.user.name} is online and ready for Slash Commands!')
+    print(f'✅ Logged in as {bot.user.name}')
+    try:
+        synced = await bot.tree.sync()
+        print(f"⚡ Synced {len(synced)} slash commands")
+    except Exception as e:
+        print(f"Error syncing: {e}")
 
-# --- THE SYNC COMMAND (Run this once in Discord to activate / commands) ---
-@bot.command()
-@commands.is_owner()
-async def sync(ctx):
-    await bot.tree.sync()
-    await ctx.send("✅ Slash commands synced to all servers!")
-
-# --- SLASH COMMANDS ---
-
-@bot.tree.command(name="join", description="Makes the bot join your voice channel")
-async def join(interaction: discord.Interaction):
-    if interaction.user.voice:
-        channel = interaction.user.voice.channel
-        if interaction.guild.voice_client:
-            await interaction.guild.voice_client.move_to(channel)
-        else:
-            await channel.connect()
-        await interaction.response.send_message(f"Connected to **{channel.name}**!")
-    else:
-        await interaction.response.send_message("❌ Join a voice channel first!", ephemeral=True)
-
-@bot.tree.command(name="play", description="Play a song from YouTube")
-@app_commands.describe(search="The song name or YouTube link")
+# 5. Slash Commands
+@bot.tree.command(name="play", description="Play music from Spotify or YouTube")
+@app_commands.describe(search="Song name or link")
 async def play(interaction: discord.Interaction, search: str):
-    # This command takes time, so we "defer" the response to avoid a timeout error
     await interaction.response.defer()
 
-    if not interaction.guild.voice_client:
-        if interaction.user.voice:
-            await interaction.user.voice.channel.connect()
-        else:
-            await interaction.followup.send("❌ Join a voice channel first!")
-            return
+    # Join Voice Channel
+    if not interaction.user.voice:
+        return await interaction.followup.send("❌ You need to be in a voice channel!")
+    
+    vc = interaction.guild.voice_client
+    if not vc:
+        vc = await interaction.user.voice.channel.connect()
 
-    # Search for the song
-    loop = asyncio.get_event_loop()
+    # Handle Spotify Links
+    display_name = search
+    if "open.spotify.com/track/" in search:
+        try:
+            track = sp.track(search)
+            search = f"{track['name']} {track['artists'][0]['name']}"
+            display_name = f"{track['name']} by {track['artists'][0]['name']}"
+        except Exception as e:
+            return await interaction.followup.send("❌ Could not read that Spotify link.")
+
+    # Search and Stream
     try:
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
-        info = data['entries'][0] if 'entries' in data else data
-        url, title = info['url'], info['title']
+        with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ydl:
+            info = ydl.extract_info(f"ytsearch:{search}", download=False)
+            if 'entries' in info:
+                info = info['entries'][0]
+            url = info['url']
+            title = info.get('title', display_name)
 
-        if interaction.guild.voice_client.is_playing():
-            interaction.guild.voice_client.stop()
+        source = await discord.FFmpegOpusAudio.from_probe(url, **FFMPEG_OPTIONS)
+        
+        if vc.is_playing():
+            vc.stop()
 
-        interaction.guild.voice_client.play(discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS))
-        await interaction.followup.send(f"🎶 Now playing: **{title}**")
+        vc.play(source)
+        await interaction.followup.send(f"🎶 Playing: **{title}**")
+
     except Exception as e:
-        await interaction.followup.send("❌ Error finding that song.")
-        print(e)
+        print(f"Play Error: {e}")
+        await interaction.followup.send("❌ Error finding or playing that song.")
 
 @bot.tree.command(name="stop", description="Stop the music and leave")
 async def stop(interaction: discord.Interaction):
     if interaction.guild.voice_client:
         await interaction.guild.voice_client.disconnect()
-        await interaction.response.send_message("👋 Left the voice channel.")
+        await interaction.response.send_message("👋 Stopped and left the channel.")
     else:
-        await interaction.response.send_message("I'm not in a voice channel.", ephemeral=True)
+        await interaction.response.send_message("I'm not in a voice channel!")
 
-@bot.tree.command(name="pause", description="Pause the current song")
-async def pause(interaction: discord.Interaction):
-    if interaction.guild.voice_client and interaction.guild.voice_client.is_playing():
-        interaction.guild.voice_client.pause()
-        await interaction.response.send_message("⏸️ Music paused.")
-    else:
-        await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+# 6. Manual Sync Command (Prefix)
+@bot.command()
+@commands.is_owner()
+async def sync(ctx):
+    await bot.tree.sync()
+    await ctx.send("✅ Slash commands synced!")
 
-@bot.tree.command(name="resume", description="Resume the current song")
-async def resume(interaction: discord.Interaction):
-    if interaction.guild.voice_client and interaction.guild.voice_client.is_paused():
-        interaction.guild.voice_client.resume()
-        await interaction.response.send_message("▶️ Music resumed.")
-    else:
-        await interaction.response.send_message("The music isn't paused.", ephemeral=True)
-
-# Start web server & bot
-keep_alive()
-bot.run(os.getenv('DISCORD_TOKEN'))
+# 7. Start the Bot
+keep_alive() # Starts the Flask web server
+bot.run(TOKEN)
