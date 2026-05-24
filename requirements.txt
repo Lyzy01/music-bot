@@ -1,6 +1,4 @@
-discord.py[voice]
-yt-dlp
+discord.py
+yt-dlp[default]
 spotipy
-pynacl
-flask
-gunicorn
+PyNaCl
