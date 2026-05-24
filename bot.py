@@ -8,19 +8,21 @@ import os
 import asyncio
 from keep_alive import keep_alive
 
-# 1. Setup & Authentication
+# 1. Setup & Environment Variables (Pulled from Render)
 TOKEN = os.getenv('DISCORD_TOKEN')
-sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
-    client_id=os.getenv('SPOTIPY_CLIENT_ID'),
-    client_secret=os.getenv('SPOTIPY_CLIENT_SECRET')
-))
+SPOTIFY_ID = os.getenv('SPOTIPY_CLIENT_ID')
+SPOTIFY_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
 
-# 2. Bot Configuration
+# Authenticate Spotify
+auth_manager = SpotifyClientCredentials(client_id=SPOTIFY_ID, client_secret=SPOTIFY_SECRET)
+sp = spotipy.Spotify(auth_manager=auth_manager)
+
+# 2. Bot & Intents
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 3. Music Player Options
+# 3. Optimized Audio Options for 2026
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
@@ -28,13 +30,14 @@ YTDL_OPTIONS = {
     'default_search': 'ytsearch',
     'nocheckcertificate': True,
     'no_warnings': True,
-    'source_address': '0.0.0.0',
     'extract_flat': True,
+    'source_address': '0.0.0.0',
     'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     }
 }
 
+# FFmpeg settings to prevent "Choppy" audio or mid-song stops
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn'
@@ -43,73 +46,68 @@ FFMPEG_OPTIONS = {
 # 4. Events
 @bot.event
 async def on_ready():
-    print(f'✅ Logged in as {bot.user.name}')
+    print(f'✅ Bot is online: {bot.user.name}')
     try:
         synced = await bot.tree.sync()
-        print(f"⚡ Synced {len(synced)} slash commands")
+        print(f"⚡ Slash commands synced: {len(synced)}")
     except Exception as e:
-        print(f"Error syncing: {e}")
+        print(f"Sync error: {e}")
 
-# 5. Slash Commands
+# 5. The Play Command
 @bot.tree.command(name="play", description="Play music from Spotify or YouTube")
-@app_commands.describe(search="Song name or link")
 async def play(interaction: discord.Interaction, search: str):
     await interaction.response.defer()
 
-    # Join Voice Channel
+    # Join VC logic
     if not interaction.user.voice:
-        return await interaction.followup.send("❌ You need to be in a voice channel!")
+        return await interaction.followup.send("❌ Join a voice channel first!")
     
     vc = interaction.guild.voice_client
     if not vc:
         vc = await interaction.user.voice.channel.connect()
 
-    # Handle Spotify Links
-    display_name = search
-    if "open.spotify.com/track/" in search:
+    # Spotify Link Detection
+    final_search = search
+    display_name = "Searching..."
+    
+    if "spotify.com" in search:
         try:
-            track = sp.track(search)
-            search = f"{track['name']} {track['artists'][0]['name']}"
-            display_name = f"{track['name']} by {track['artists'][0]['name']}"
-        except Exception as e:
-            return await interaction.followup.send("❌ Could not read that Spotify link.")
+            track_info = sp.track(search)
+            final_search = f"{track_info['name']} {track_info['artists'][0]['name']}"
+            display_name = f"{track_info['name']} by {track_info['artists'][0]['name']}"
+        except Exception:
+            return await interaction.followup.send("❌ Error reading Spotify link. Is your Client ID/Secret correct?")
 
-    # Search and Stream
+    # Fetch Audio
     try:
         with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ydl:
-            info = ydl.extract_info(f"ytsearch:{search}", download=False)
+            info = ydl.extract_info(f"ytsearch:{final_search}", download=False)
             if 'entries' in info:
                 info = info['entries'][0]
             url = info['url']
             title = info.get('title', display_name)
 
+        # Use FFmpegOpusAudio for better quality in 2026
         source = await discord.FFmpegOpusAudio.from_probe(url, **FFMPEG_OPTIONS)
         
         if vc.is_playing():
             vc.stop()
 
         vc.play(source)
-        await interaction.followup.send(f"🎶 Playing: **{title}**")
+        await interaction.followup.send(f"🎶 Now Playing: **{title}**")
 
     except Exception as e:
-        print(f"Play Error: {e}")
-        await interaction.followup.send("❌ Error finding or playing that song.")
+        print(f"Play error: {e}")
+        await interaction.followup.send("❌ I couldn't find or play that song. YouTube might be blocking me!")
 
-@bot.tree.command(name="stop", description="Stop the music and leave")
-async def stop(interaction: discord.Interaction):
+@bot.tree.command(name="leave", description="Kick the bot from voice")
+async def leave(interaction: discord.Interaction):
     if interaction.guild.voice_client:
         await interaction.guild.voice_client.disconnect()
-        await interaction.response.send_message("👋 Stopped and left the channel.")
+        await interaction.response.send_message("👋 Bye bye!")
     else:
-        await interaction.response.send_message("I'm not in a voice channel!")
+        await interaction.response.send_message("I'm not in a channel!")
 
-# 6. Manual Sync Command (Prefix)
-@bot.command()
-@commands.is_owner()
-async def sync(ctx):
-    await bot.tree.sync()
-    await ctx.send("✅ Slash commands synced!")
-
-# 7. Start the Bot
-keep_alive() # Starts the Flask web server
+# 6. Keep-Alive & Run
+keep_alive()
 bot.run(TOKEN)
