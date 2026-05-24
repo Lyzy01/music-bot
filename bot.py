@@ -19,7 +19,8 @@ sp = spotipy.Spotify(auth_manager=auth_manager)
 # 2. Bot & Intents
 intents = discord.Intents.default()
 intents.message_content = True 
-intents.members = True
+intents.members = True # Needed to find you in other servers
+intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # 3. YouTube & FFmpeg Options
@@ -46,30 +47,51 @@ FFMPEG_OPTIONS = {
 @bot.event
 async def on_ready():
     print(f'✅ Bot Online: {bot.user.name}')
+    # We do a global sync once on startup for DMs
+    try:
+        await bot.tree.sync()
+        print("🌍 Global commands synced (Available in DMs)")
+    except Exception as e:
+        print(f"Sync error: {e}")
 
-# 5. Commands (UPDATED SYNC COMMAND ADDED HERE)
+# 5. DM-Compatible Commands
 @bot.command()
 @commands.is_owner()
 async def sync(ctx):
-    """Force syncs slash commands to the current server immediately"""
+    """Run this in DMs to force a global refresh"""
     try:
-        bot.tree.copy_global_to(guild=ctx.guild)
-        synced = await bot.tree.sync(guild=ctx.guild)
-        await ctx.send(f"⚡ Forced sync {len(synced)} commands to this server!")
+        synced = await bot.tree.sync()
+        await ctx.send(f"🌍 Global sync complete! {len(synced)} commands updated.")
+        await ctx.send("💡 Note: Global commands can take up to an hour to appear in DMs.")
     except Exception as e:
         await ctx.send(f"❌ Sync failed: {e}")
 
-@bot.tree.command(name="play", description="Play music from Spotify or YouTube")
+@bot.tree.command(name="play", description="Play music (Can be used in DMs)")
 async def play(interaction: discord.Interaction, search: str):
     await interaction.response.defer()
 
-    if not interaction.user.voice:
-        return await interaction.followup.send("❌ Join a voice channel first!")
+    # FIND THE USER: Loop through all servers the bot is in to find where you are sitting
+    user_vc = None
+    target_guild = None
     
-    vc = interaction.guild.voice_client
-    if not vc:
-        vc = await interaction.user.voice.channel.connect()
+    for guild in bot.guilds:
+        member = guild.get_member(interaction.user.id)
+        if member and member.voice:
+            user_vc = member.voice.channel
+            target_guild = guild
+            break
 
+    if not user_vc:
+        return await interaction.followup.send("❌ I couldn't find you in any Voice Channel! Make sure you are in a server I am also in.")
+
+    # Connect logic
+    vc = target_guild.voice_client
+    if not vc:
+        vc = await user_vc.connect()
+    elif vc.channel != user_vc:
+        await vc.move_to(user_vc)
+
+    # Spotify Logic
     final_query = search
     if "spotify.com" in search:
         try:
@@ -78,6 +100,7 @@ async def play(interaction: discord.Interaction, search: str):
         except:
             return await interaction.followup.send("❌ Spotify link error.")
 
+    # Play Logic
     try:
         with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ydl:
             info = ydl.extract_info(f"ytsearch:{final_query}", download=False)['entries'][0]
@@ -90,18 +113,20 @@ async def play(interaction: discord.Interaction, search: str):
             vc.stop()
 
         vc.play(source)
-        await interaction.followup.send(f"🎶 Now Playing: **{title}**")
+        await interaction.followup.send(f"🎶 Playing in **{target_guild.name}**: `{title}`")
 
     except Exception as e:
-        await interaction.followup.send("❌ Error finding that song.")
+        await interaction.followup.send(f"❌ Error: {e}")
 
-@bot.tree.command(name="leave", description="Make the bot leave voice")
+@bot.tree.command(name="leave", description="Make the bot leave the current voice channel")
 async def leave(interaction: discord.Interaction):
-    if interaction.guild.voice_client:
-        await interaction.guild.voice_client.disconnect()
-        await interaction.response.send_message("👋 Left the channel!")
-    else:
-        await interaction.response.send_message("I'm not in a channel!")
+    # Find where the bot is currently playing
+    for vc in bot.voice_clients:
+        if interaction.user in vc.channel.members:
+            await vc.disconnect()
+            return await interaction.response.send_message(f"👋 Left the channel in {vc.guild.name}")
+    
+    await interaction.response.send_message("❌ I'm not in a voice channel with you!")
 
 # 6. Run
 keep_alive()
