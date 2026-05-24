@@ -1,5 +1,5 @@
 discord.py[voice]
-yt-dlp
+play-dl
 pynacl
 flask
 gunicorn
